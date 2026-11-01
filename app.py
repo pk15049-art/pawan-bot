@@ -1,14 +1,12 @@
 """
-PAWAN QUANT ENGINE V7.5 - HIGH-PRECISION 24/7 CLOUD WORKER
-Verified Ground Reality Baseline:
-  - Starting Capital: $1,000.00
-  - Actual Realized Balance: $1,050.65 (Net Profit: +$50.65)
-  - Real Completed Trades: 176
-  - Real-Time Price Feeds: Binance.US & Coinbase (Zero 451 geo-blocks on US Cloud)
-  - Clean Take-Profit targets (+0.40% Day / +0.50% Night) guaranteeing real cash profits
-  - Zero $0.00 break-even choking bug
-  - 5-Minute re-entry cooldown per symbol
-  - 24/7 Cloud Architecture (Render + cron-job.org)
+PAWAN QUANT ENGINE V8.0 - STRICT TIME-DECAY & MULTI-EXCHANGE CLOUD WORKER
+Features:
+  1. Strict 45-Minute Hard Exit (At 45 mins, sells immediately at market price, zero freeze)
+  2. Take-Profit Target (+0.40% Day / +0.50% Night -> Cash Profit)
+  3. Safety Stop-Loss (-0.25%)
+  4. Real-time Multi-Exchange Feeds (Binance.US + Coinbase + CoinGecko -> 100% US Cloud Verified)
+  5. 5-Minute Re-entry Cooldown per asset
+  6. Verified Baseline: $1,050.65 Balance | 176 Trades
 """
 import os
 import time
@@ -87,14 +85,14 @@ def send_alert(text):
     except: pass
 
 def get_live_price(symbol):
-    # 1. Try Binance.US (Official US endpoint, fast & never blocked on Render US servers)
+    # 1. Try Binance.US
     try:
         res = requests.get(f"https://api.binance.us/api/v3/ticker/price?symbol={symbol}", timeout=3)
         if res.status_code == 200:
             return float(res.json()["price"])
     except: pass
 
-    # 2. Try Coinbase (US Global Exchange, zero geo-blocks, instant real-time quotes)
+    # 2. Try Coinbase
     coinbase_map = {"BTCUSDT": "BTC-USD", "ETHUSDT": "ETH-USD", "SOLUSDT": "SOL-USD"}
     if symbol in coinbase_map:
         try:
@@ -104,7 +102,7 @@ def get_live_price(symbol):
                 return float(res.json()["data"]["amount"])
         except: pass
 
-    # 3. Try Binance Global Mirror (data.binance.com)
+    # 3. Try Binance Global Mirror
     try:
         res = requests.get(f"https://data.binance.com/api/v3/ticker/price?symbol={symbol}", timeout=3)
         if res.status_code == 200:
@@ -168,7 +166,7 @@ def execute_auto_buy(symbol, price):
         f"Size: `${trade_size_usd}`\n"
         f"🎯 Profit Target (+{gain_pct:.2f}%): `${tp:,.2f}` (Gain: +${expected_profit:.2f})\n"
         f"🛑 Safety Stop (-{loss_pct:.2f}%): `${sl:,.2f}` (Risk: -${expected_loss:.2f})\n"
-        f"⏱ Max Duration: {max_hold_mins} Mins"
+        f"⏱ Strict Max Hold: {max_hold_mins} Mins"
     )
     print(f"[{trade['mode']} BUY] {symbol} @ ${price:,.2f} | Size: ${trade_size_usd} | Target: ${tp:,.2f}", flush=True)
     send_alert(msg)
@@ -213,25 +211,20 @@ def trading_loop_worker():
                 elapsed_mins = (now - pos["entry_timestamp"]) / 60.0
                 pnl_pct = (curr_p - pos["entry"]) / pos["entry"]
 
-                # 1. Take-Profit Target Hit (Pure Cash Profit - Increments Balance & Win Rate)
+                # 1. Take-Profit Target Hit (Pure Cash Profit)
                 if curr_p >= pos["tp"]:
                     execute_auto_sell(i, curr_p, f"TARGET HIT (+{pnl_pct*100:.2f}%)")
                     continue
 
-                # 2. Strict Safety Stop-Loss (Gives natural breathing room, prevents deep loss)
+                # 2. Strict Safety Stop-Loss
                 if curr_p <= pos["sl"]:
                     execute_auto_sell(i, curr_p, f"SAFETY STOP LOSS (-{abs(pnl_pct)*100:.2f}%)")
                     continue
 
-                # 3. Time Harvest Rule: Only take profit if trade has meaningful gain (> +0.15%)
+                # 3. STRICT HARD TIME EXIT (Zero conditions: at 45 mins in Day or 35 mins at Night, exits immediately at market price!)
                 if elapsed_mins >= pos["max_hold_mins"]:
-                    if curr_p >= pos["entry"] * 1.0015:
-                        execute_auto_sell(i, curr_p, f"TIME HARVEST (+{pnl_pct*100:.2f}%)")
-                        continue
-                    elif elapsed_mins >= (pos["max_hold_mins"] + 20):
-                        # Only exit stagnant trades if dead flat after 55-65 mins
-                        execute_auto_sell(i, curr_p, "STAGNANT ROTATION")
-                        continue
+                    execute_auto_sell(i, curr_p, f"STRICT {int(pos['max_hold_mins'])}-MIN HARD EXIT ({pnl_pct*100:+.2f}%)")
+                    continue
 
             # Position Entry Controller with 5-minute cooldown per asset
             if len(open_positions) < max_allowed_trades:
@@ -256,7 +249,7 @@ def home():
     win_pct = round((wins / total_trades) * 100, 1) if total_trades > 0 else 0
     return jsonify({
         "status": "ONLINE_24_7",
-        "system": "Pawan Quant Engine V7.5",
+        "system": "Pawan Quant Engine V8.0",
         "session": "NIGHT" if is_night_session() else "DAY",
         "balance": CAPITAL,
         "total_trades": total_trades,
