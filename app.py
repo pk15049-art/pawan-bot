@@ -1,12 +1,7 @@
 """
-PAWAN QUANT ENGINE V9.0 - BULLETPROOF CLOUD ENGINE (RENDER 24/7)
-Features:
-  - 100% Guaranteed Price Stream (Coinbase with User-Agent + CryptoCompare + CoinCap + Gate.io + Cache)
-  - Auto-Fills 3 Concurrent Day Slots Immediately on Boot
-  - Combined Basket Harvest (+1.40 USD)
-  - Strict 45-Minute Hard Time Exit
-  - Telegram Alerts (@pawan_trading_demo_bot)
-  - Verified Actual Baseline: $1,050.65
+PAWAN QUANT ENGINE V9.0 - BULLETPROOF 24/7 AUTO-TRADING CLOUD ENGINE
+Repo: https://github.com/pk15049-art/pawan-bot
+Cloud: https://pawan-bot.onrender.com
 """
 import os
 import time
@@ -25,9 +20,10 @@ CHAT_ID = None
 STATE_FILE = "account_state.json"
 
 last_basket_exit_time = 0
-BASKET_RE_ENTRY_COOLDOWN = 120  # 2 minutes cooldown after harvesting profit
-BASKET_PROFIT_TARGET_USD = 1.40  # $1.40 - $2.00 combined harvest trigger
+BASKET_RE_ENTRY_COOLDOWN = 120  # Strict 2-minute cooldown after harvest
+BASKET_PROFIT_TARGET_USD = 1.40  # +$1.40 combined profit target
 
+# Fallback cache guarantees get_live_price NEVER returns None
 cached_prices = {
     "BTCUSDT": 77820.0,
     "ETHUSDT": 2265.0,
@@ -98,7 +94,7 @@ def send_alert(text):
 def get_live_price(symbol):
     global cached_prices
 
-    # 1. Try Coinbase with Browser User-Agent
+    # 1. Coinbase API (US Global)
     coinbase_map = {"BTCUSDT": "BTC-USD", "ETHUSDT": "ETH-USD", "SOLUSDT": "SOL-USD"}
     if symbol in coinbase_map:
         try:
@@ -111,7 +107,7 @@ def get_live_price(symbol):
                     return p
         except: pass
 
-    # 2. Try CryptoCompare (Fast, open, zero block)
+    # 2. CryptoCompare API
     cc_map = {"BTCUSDT": "BTC", "ETHUSDT": "ETH", "SOLUSDT": "SOL"}
     if symbol in cc_map:
         try:
@@ -124,7 +120,7 @@ def get_live_price(symbol):
                     return p
         except: pass
 
-    # 3. Try CoinCap Public API
+    # 3. CoinCap Public API
     coincap_map = {"BTCUSDT": "bitcoin", "ETHUSDT": "ethereum", "SOLUSDT": "solana"}
     if symbol in coincap_map:
         try:
@@ -137,17 +133,7 @@ def get_live_price(symbol):
                     return p
         except: pass
 
-    # 4. Try Binance.US
-    try:
-        res = requests.get(f"https://api.binance.us/api/v3/ticker/price?symbol={symbol}", headers=HTTP_HEADERS, timeout=3)
-        if res.status_code == 200:
-            p = float(res.json()["price"])
-            if p > 0:
-                cached_prices[symbol] = p
-                return p
-    except: pass
-
-    # 5. Return verified cached price (Guarantees zero None)
+    # 4. Fallback to in-memory verified cache (Never fails, zero hang)
     return cached_prices.get(symbol, 100.0)
 
 def execute_auto_buy(symbol, price):
@@ -197,7 +183,7 @@ def execute_auto_buy(symbol, price):
         f"🛑 Safety SL (-{loss_pct:.2f}%): `${sl:,.2f}` (-${expected_loss:.2f})\n"
         f"🧺 Basket Target: +$1.40 Total"
     )
-    print(f"[{trade['mode']} BUY] {symbol} @ ${price:,.2f} | Size: ${trade_size_usd}", flush=True)
+    print(f"[{trade['mode']} BUY] {symbol} @ ${price:,.2f}", flush=True)
     send_alert(msg)
 
 def execute_basket_harvest(total_pnl, exit_prices):
@@ -243,7 +229,7 @@ def execute_auto_sell(index, price, reason):
         f"Coin: `{pos['symbol']}`\n"
         f"Exit: `${price:,.2f}` | Entry: `${pos['entry']:,.2f}`\n"
         f"💰 Net P&L: `{pnl_sign}${pnl:,.2f}`\n"
-        f"💼 Total Balance: `${CAPITAL:,.2f}` | Trades: `{total_trades}`"
+        f"💼 Total Balance:* `${CAPITAL:,.2f}` | Trades: `{total_trades}`"
     )
     print(f"[EXIT: {reason}] {pos['symbol']} @ ${price:,.2f} | PnL: {pnl_sign}${pnl:,.2f}", flush=True)
     send_alert(msg)
@@ -256,23 +242,21 @@ def trading_loop_worker():
             night = is_night_session()
             max_allowed_trades = 1 if night else 3
 
-            # --- STEP 1: CALCULATE COMBINED BASKET P&L ---
+            # 1. Combined Basket Harvest Check (+1.40 USD)
             if len(open_positions) >= 2:
                 total_basket_pnl = 0.0
                 exit_prices = {}
-
                 for pos in open_positions:
                     p = get_live_price(pos["symbol"])
                     total_basket_pnl += (p - pos["entry"]) * pos["qty"]
                     exit_prices[pos["symbol"]] = p
 
-                # HARVEST TRIGGER: If combined profit reaches $1.40 - $2.00, book all together!
                 if total_basket_pnl >= BASKET_PROFIT_TARGET_USD:
                     execute_basket_harvest(total_basket_pnl, exit_prices)
                     time.sleep(POLL_INTERVAL)
                     continue
 
-            # --- STEP 2: INDIVIDUAL POSITION CHECKS ---
+            # 2. Individual Target, SL, and 45-Min Hard Exit
             for i in range(len(open_positions) - 1, -1, -1):
                 pos = open_positions[i]
                 s = pos["symbol"]
@@ -292,7 +276,7 @@ def trading_loop_worker():
                     execute_auto_sell(i, curr_p, f"STRICT {int(pos['max_hold_mins'])}-MIN HARD EXIT ({pnl_pct*100:+.2f}%)")
                     continue
 
-            # --- STEP 3: RE-CYCLE ENTRY CONTROLLER ---
+            # 3. Auto Re-Cycle Entry Controller (2 min cooldown after harvest)
             cooldown_left = BASKET_RE_ENTRY_COOLDOWN - (now - last_basket_exit_time)
             if cooldown_left <= 0 and len(open_positions) < max_allowed_trades:
                 active_symbols = [p["symbol"] for p in open_positions]
@@ -304,6 +288,7 @@ def trading_loop_worker():
 
             time.sleep(POLL_INTERVAL)
         except Exception as e:
+            print(f"Loop Exception: {e}", flush=True)
             time.sleep(POLL_INTERVAL)
 
 threading.Thread(target=trading_loop_worker, daemon=True).start()
@@ -311,11 +296,16 @@ threading.Thread(target=trading_loop_worker, daemon=True).start()
 @app.route('/')
 def home():
     win_pct = round((wins / total_trades) * 100, 1) if total_trades > 0 else 0
+    net_profit = round(CAPITAL - 1000.0, 2)
     return jsonify({
         "status": "ONLINE_24_7",
         "system": "Pawan Quant Engine V9.0 (Bulletproof Auto-Trading)",
         "session": "NIGHT" if is_night_session() else "DAY",
-        "balance": CAPITAL,
+        "starting_capital": 1000.00,
+        "balance": round(CAPITAL, 2),
+        "total_profit": f"+${net_profit:.2f}",
+        "total_profit_pct": f"+{(net_profit/1000.0)*100:.2f}%",
+        "realized_profit": f"+${realized_pnl:.2f}",
         "total_trades": total_trades,
         "wins": wins,
         "win_rate": f"{win_pct}%",
