@@ -1,12 +1,12 @@
 """
-PAWAN QUANT ENGINE V8.0 - STRICT TIME-DECAY & MULTI-EXCHANGE CLOUD WORKER
+PAWAN QUANT ENGINE V8.5 - COMBINED BASKET SCALP & RE-CYCLE ENGINE
 Features:
-  1. Strict 45-Minute Hard Exit (At 45 mins, sells immediately at market price, zero freeze)
-  2. Take-Profit Target (+0.40% Day / +0.50% Night -> Cash Profit)
-  3. Safety Stop-Loss (-0.25%)
-  4. Real-time Multi-Exchange Feeds (Binance.US + Coinbase + CoinGecko -> 100% US Cloud Verified)
-  5. 5-Minute Re-entry Cooldown per asset
-  6. Verified Baseline: $1,050.65 Balance | 176 Trades
+  1. Combined Basket Harvest: Jaise hi teeno coins ka total profit +$1.40 se +$2.00 pahuche, 
+     saare trades ek sath close hokar cash wallet me add ho jata hai!
+  2. Fast 2-Minute Re-entry: Profit book hote hi 2 minute me naya basket re-open ho jata hai.
+  3. Strict Individual Safety Stop: Kisi akele coin me -0.25% se zyada risk nahi hota.
+  4. 24/7 Cloud Architecture: Render + cron-job.org + Coinbase/Binance.US live feeds.
+  5. Verified Actual Baseline: Starts from real $1,050.65 balance.
 """
 import os
 import time
@@ -24,8 +24,9 @@ TELEGRAM_BOT_TOKEN = "9023075336:AAEz4CLf3SPcEZY7ilJ9ajim2X1RhDrQtbM"
 CHAT_ID = None
 STATE_FILE = "account_state.json"
 
-last_exit_times = {"BTCUSDT": 0, "ETHUSDT": 0, "SOLUSDT": 0}
-RE_ENTRY_COOLDOWN_SECS = 300  # 5 minutes
+last_basket_exit_time = 0
+BASKET_RE_ENTRY_COOLDOWN = 120  # 2 minutes cooldown after harvesting profit
+BASKET_PROFIT_TARGET_USD = 1.40  # $1.40 - $2.00 combined harvest trigger
 
 def get_ist_time():
     return datetime.utcnow() + timedelta(hours=5, minutes=30)
@@ -85,14 +86,12 @@ def send_alert(text):
     except: pass
 
 def get_live_price(symbol):
-    # 1. Try Binance.US
     try:
         res = requests.get(f"https://api.binance.us/api/v3/ticker/price?symbol={symbol}", timeout=3)
         if res.status_code == 200:
             return float(res.json()["price"])
     except: pass
 
-    # 2. Try Coinbase
     coinbase_map = {"BTCUSDT": "BTC-USD", "ETHUSDT": "ETH-USD", "SOLUSDT": "SOL-USD"}
     if symbol in coinbase_map:
         try:
@@ -102,14 +101,12 @@ def get_live_price(symbol):
                 return float(res.json()["data"]["amount"])
         except: pass
 
-    # 3. Try Binance Global Mirror
     try:
         res = requests.get(f"https://data.binance.com/api/v3/ticker/price?symbol={symbol}", timeout=3)
         if res.status_code == 200:
             return float(res.json()["price"])
     except: pass
 
-    # 4. Try CoinGecko
     cg_ids = {"BTCUSDT": "bitcoin", "ETHUSDT": "ethereum", "SOLUSDT": "solana"}
     if symbol in cg_ids:
         try:
@@ -126,14 +123,14 @@ def execute_auto_buy(symbol, price):
 
     if night:
         trade_size_usd = round(CAPITAL * 0.36, 2)
-        sl_pct = 0.0025   # -0.25% stop loss
-        tp_pct = 0.0050   # +0.50% profit target
+        sl_pct = 0.0025
+        tp_pct = 0.0050
         max_hold_mins = 35
         mode_label = "NIGHT SNIPER"
     else:
         trade_size_usd = round(CAPITAL * 0.28, 2)
-        sl_pct = 0.0025   # -0.25% stop loss
-        tp_pct = 0.0040   # +0.40% profit target
+        sl_pct = 0.0025
+        tp_pct = 0.0040
         max_hold_mins = 45
         mode_label = "DAY MULTI-BASKET"
 
@@ -162,17 +159,41 @@ def execute_auto_buy(symbol, price):
     msg = (
         f"⚡ *[{mode_label} ENTRY]*\n"
         f"Coin: `{symbol}`\n"
-        f"Entry Price: `${price:,.2f}`\n"
-        f"Size: `${trade_size_usd}`\n"
-        f"🎯 Profit Target (+{gain_pct:.2f}%): `${tp:,.2f}` (Gain: +${expected_profit:.2f})\n"
-        f"🛑 Safety Stop (-{loss_pct:.2f}%): `${sl:,.2f}` (Risk: -${expected_loss:.2f})\n"
-        f"⏱ Strict Max Hold: {max_hold_mins} Mins"
+        f"Entry: `${price:,.2f}` | Size: `${trade_size_usd}`\n"
+        f"🎯 Target (+{gain_pct:.2f}%): `${tp:,.2f}` (+${expected_profit:.2f})\n"
+        f"🛑 Safety SL (-{loss_pct:.2f}%): `${sl:,.2f}` (-${expected_loss:.2f})\n"
+        f"🧺 Basket Target: +$1.40 Total"
     )
-    print(f"[{trade['mode']} BUY] {symbol} @ ${price:,.2f} | Size: ${trade_size_usd} | Target: ${tp:,.2f}", flush=True)
+    print(f"[{trade['mode']} BUY] {symbol} @ ${price:,.2f} | Size: ${trade_size_usd}", flush=True)
+    send_alert(msg)
+
+def execute_basket_harvest(total_pnl, exit_prices):
+    global CAPITAL, realized_pnl, total_trades, wins, open_positions, last_basket_exit_time
+    count_closed = len(open_positions)
+    open_positions = []
+    
+    total_pnl = round(total_pnl, 2)
+    CAPITAL = round(CAPITAL + total_pnl, 2)
+    realized_pnl = round(realized_pnl + total_pnl, 2)
+    total_trades += count_closed
+    wins += count_closed
+
+    last_basket_exit_time = time.time()
+    save_state(CAPITAL, realized_pnl, total_trades, wins)
+
+    details = "\n".join([f"• `{s}`: exit `${p:,.2f}`" for s, p in exit_prices.items()])
+    msg = (
+        f"🎉 *[COMBINED BASKET HARVEST: PROFIT BOOKED!]*\n"
+        f"💰 *Net Cash Added: `+${total_pnl:.2f}`*\n"
+        f"{details}\n"
+        f"💼 *Total Balance:* `${CAPITAL:,.2f}` | Trades: `{total_trades}`\n"
+        f"⏱ *Re-cycling fresh basket in 2 minutes!*"
+    )
+    print(f"[BASKET HARVEST] Cash Added: +${total_pnl:.2f} | Balance: ${CAPITAL:,.2f}", flush=True)
     send_alert(msg)
 
 def execute_auto_sell(index, price, reason):
-    global CAPITAL, realized_pnl, total_trades, wins, open_positions, last_exit_times
+    global CAPITAL, realized_pnl, total_trades, wins, open_positions
     pos = open_positions.pop(index)
     pnl = round((price - pos["entry"]) * pos["qty"], 2)
     CAPITAL = round(CAPITAL + pnl, 2)
@@ -180,7 +201,6 @@ def execute_auto_sell(index, price, reason):
     total_trades += 1
     if pnl > 0: wins += 1
 
-    last_exit_times[pos["symbol"]] = time.time()
     save_state(CAPITAL, realized_pnl, total_trades, wins)
 
     icon = "🎯" if pnl >= 0 else "🛑"
@@ -189,8 +209,8 @@ def execute_auto_sell(index, price, reason):
         f"{icon} *[AUTO-EXIT: {reason}]*\n"
         f"Coin: `{pos['symbol']}`\n"
         f"Exit: `${price:,.2f}` | Entry: `${pos['entry']:,.2f}`\n"
-        f"💰 Net Profit/Loss: `{pnl_sign}${pnl:,.2f}`\n"
-        f"💼 Total Balance: `${CAPITAL:,.2f}` | Completed Trades: `{total_trades}`"
+        f"💰 Net P&L: `{pnl_sign}${pnl:,.2f}`\n"
+        f"💼 Total Balance: `${CAPITAL:,.2f}` | Trades: `{total_trades}`"
     )
     print(f"[EXIT: {reason}] {pos['symbol']} @ ${price:,.2f} | PnL: {pnl_sign}${pnl:,.2f}", flush=True)
     send_alert(msg)
@@ -202,6 +222,28 @@ def trading_loop_worker():
             night = is_night_session()
             max_allowed_trades = 1 if night else 3
 
+            # --- STEP 1: CALCULATE COMBINED BASKET P&L ---
+            if len(open_positions) >= 2:
+                total_basket_pnl = 0.0
+                exit_prices = {}
+                valid_quotes = True
+
+                for pos in open_positions:
+                    p = get_live_price(pos["symbol"])
+                    if p:
+                        total_basket_pnl += (p - pos["entry"]) * pos["qty"]
+                        exit_prices[pos["symbol"]] = p
+                    else:
+                        valid_quotes = False
+                        break
+
+                # HARVEST TRIGGER: If combined profit reaches $1.40 - $2.00, book all together!
+                if valid_quotes and total_basket_pnl >= BASKET_PROFIT_TARGET_USD:
+                    execute_basket_harvest(total_basket_pnl, exit_prices)
+                    time.sleep(POLL_INTERVAL)
+                    continue
+
+            # --- STEP 2: INDIVIDUAL POSITION CHECKS ---
             for i in range(len(open_positions) - 1, -1, -1):
                 pos = open_positions[i]
                 s = pos["symbol"]
@@ -211,27 +253,24 @@ def trading_loop_worker():
                 elapsed_mins = (now - pos["entry_timestamp"]) / 60.0
                 pnl_pct = (curr_p - pos["entry"]) / pos["entry"]
 
-                # 1. Take-Profit Target Hit (Pure Cash Profit)
                 if curr_p >= pos["tp"]:
                     execute_auto_sell(i, curr_p, f"TARGET HIT (+{pnl_pct*100:.2f}%)")
                     continue
 
-                # 2. Strict Safety Stop-Loss
                 if curr_p <= pos["sl"]:
                     execute_auto_sell(i, curr_p, f"SAFETY STOP LOSS (-{abs(pnl_pct)*100:.2f}%)")
                     continue
 
-                # 3. STRICT HARD TIME EXIT (Zero conditions: at 45 mins in Day or 35 mins at Night, exits immediately at market price!)
                 if elapsed_mins >= pos["max_hold_mins"]:
                     execute_auto_sell(i, curr_p, f"STRICT {int(pos['max_hold_mins'])}-MIN HARD EXIT ({pnl_pct*100:+.2f}%)")
                     continue
 
-            # Position Entry Controller with 5-minute cooldown per asset
-            if len(open_positions) < max_allowed_trades:
+            # --- STEP 3: RE-CYCLE ENTRY CONTROLLER ---
+            cooldown_left = BASKET_RE_ENTRY_COOLDOWN - (now - last_basket_exit_time)
+            if cooldown_left <= 0 and len(open_positions) < max_allowed_trades:
                 active_symbols = [p["symbol"] for p in open_positions]
                 for s in SYMBOLS:
-                    cooldown_remaining = RE_ENTRY_COOLDOWN_SECS - (now - last_exit_times.get(s, 0))
-                    if s not in active_symbols and len(open_positions) < max_allowed_trades and cooldown_remaining <= 0:
+                    if s not in active_symbols and len(open_positions) < max_allowed_trades:
                         p = get_live_price(s)
                         if p:
                             execute_auto_buy(s, p)
@@ -241,7 +280,6 @@ def trading_loop_worker():
         except Exception:
             time.sleep(POLL_INTERVAL)
 
-# Background auto-trader thread
 threading.Thread(target=trading_loop_worker, daemon=True).start()
 
 @app.route('/')
@@ -249,12 +287,13 @@ def home():
     win_pct = round((wins / total_trades) * 100, 1) if total_trades > 0 else 0
     return jsonify({
         "status": "ONLINE_24_7",
-        "system": "Pawan Quant Engine V8.0",
+        "system": "Pawan Quant Engine V8.5 (Basket Harvest Mode)",
         "session": "NIGHT" if is_night_session() else "DAY",
         "balance": CAPITAL,
         "total_trades": total_trades,
         "wins": wins,
         "win_rate": f"{win_pct}%",
+        "basket_harvest_target": f"+${BASKET_PROFIT_TARGET_USD:.2f}",
         "active_positions_count": len(open_positions),
         "open_positions": [{"symbol": p["symbol"], "entry": p["entry"], "target": p["tp"], "size": p["trade_size"]} for p in open_positions],
         "ist_time": get_ist_time().strftime("%Y-%m-%d %I:%M:%S %p IST")
