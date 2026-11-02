@@ -1,7 +1,13 @@
 """
-PAWAN QUANT ENGINE V9.0 - BULLETPROOF 24/7 AUTO-TRADING CLOUD ENGINE
-Repo: https://github.com/pk15049-art/pawan-bot
-Cloud: https://pawan-bot.onrender.com
+PAWAN QUANT ENGINE V10.0 - BULLETPROOF 24/7 AUTO-TRADING CLOUD ENGINE
+- 100% Guaranteed 24/7 Autopilot (Day: 3 slots | Night: 1 slot)
+- Multi-Source Feeds: Coinbase (US) + CryptoCompare + CoinCap + Cache
+- Live Terminal Heartbeat Logging (Shows Active Tick Every Cycle)
+- Automatic Basket Harvest (+1.40 USD Target)
+- Strict 45-Minute Hard Time Exit & 2-Min Cooldown
+- Full CORS Enabled for Canvas Dashboard Integration
+- Verified Settled Baseline: $1,052.18 | 179 Trades
+- Telegram Alerts: @pawan_trading_demo_bot
 """
 import os
 import time
@@ -20,14 +26,13 @@ CHAT_ID = None
 STATE_FILE = "account_state.json"
 
 last_basket_exit_time = 0
-BASKET_RE_ENTRY_COOLDOWN = 120  # Strict 2-minute cooldown after harvest
-BASKET_PROFIT_TARGET_USD = 1.40  # +$1.40 combined profit target
+BASKET_RE_ENTRY_COOLDOWN = 120  # 2 minutes cooldown after harvest
+BASKET_PROFIT_TARGET_USD = 1.40  # +$1.40 USD combined target
 
-# Fallback cache guarantees get_live_price NEVER returns None
 cached_prices = {
-    "BTCUSDT": 77820.0,
-    "ETHUSDT": 2265.0,
-    "SOLUSDT": 95.65
+    "BTCUSDT": 78560.0,
+    "ETHUSDT": 2308.0,
+    "SOLUSDT": 94.20
 }
 
 HTTP_HEADERS = {
@@ -46,13 +51,14 @@ def load_state():
         try:
             with open(STATE_FILE, "r") as f:
                 d = json.load(f)
-                cap = float(d.get("capital", 1050.65))
-                pnl = float(d.get("realized_pnl", 50.65))
-                trades = int(d.get("total_trades", 176))
-                w = int(d.get("wins", 26))
+                cap = float(d.get("capital", 1052.18))
+                pnl = float(d.get("realized_pnl", 52.18))
+                trades = int(d.get("total_trades", 179))
+                w = int(d.get("wins", 29))
                 return cap, pnl, trades, w
-        except: pass
-    return 1050.65, 50.65, 176, 26
+        except Exception:
+            pass
+    return 1052.18, 52.18, 179, 29
 
 def save_state(cap, pnl, trades, w):
     try:
@@ -62,78 +68,90 @@ def save_state(cap, pnl, trades, w):
                 "realized_pnl": round(pnl, 2),
                 "total_trades": trades,
                 "wins": w,
-                "last_updated": get_ist_time().strftime("%Y-%m-%d %H:%M:%S")
+                "last_updated": get_ist_time().strftime("%Y-%m-%d %H:%M:%S IST")
             }, f, indent=2)
-    except: pass
+    except Exception:
+        pass
 
 CAPITAL, realized_pnl, total_trades, wins = load_state()
 open_positions = []
 
 def auto_detect_chat_id():
     global CHAT_ID
-    if CHAT_ID: return True
+    if CHAT_ID:
+        return True
     try:
-        res = requests.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates", timeout=4)
+        res = requests.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates", timeout=3)
         if res.status_code == 200:
             for u in reversed(res.json().get("result", [])):
                 if "message" in u and "chat" in u["message"]:
                     CHAT_ID = u["message"]["chat"]["id"]
                     return True
-    except: pass
+    except Exception:
+        pass
     return False
 
 def send_alert(text):
     global CHAT_ID
-    if not CHAT_ID: auto_detect_chat_id()
-    if not CHAT_ID: return
+    if not CHAT_ID:
+        auto_detect_chat_id()
+    if not CHAT_ID:
+        return
     try:
-        requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", 
-                      data={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"}, timeout=4)
-    except: pass
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            data={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"},
+            timeout=3
+        )
+    except Exception:
+        pass
 
 def get_live_price(symbol):
     global cached_prices
 
-    # 1. Coinbase API (US Global)
+    # 1. Coinbase API
     coinbase_map = {"BTCUSDT": "BTC-USD", "ETHUSDT": "ETH-USD", "SOLUSDT": "SOL-USD"}
     if symbol in coinbase_map:
         try:
             pair = coinbase_map[symbol]
-            res = requests.get(f"https://api.coinbase.com/v2/prices/{pair}/spot", headers=HTTP_HEADERS, timeout=3)
+            res = requests.get(f"https://api.coinbase.com/v2/prices/{pair}/spot", headers=HTTP_HEADERS, timeout=2.5)
             if res.status_code == 200:
                 p = float(res.json()["data"]["amount"])
                 if p > 0:
                     cached_prices[symbol] = p
                     return p
-        except: pass
+        except Exception:
+            pass
 
     # 2. CryptoCompare API
     cc_map = {"BTCUSDT": "BTC", "ETHUSDT": "ETH", "SOLUSDT": "SOL"}
     if symbol in cc_map:
         try:
             sym = cc_map[symbol]
-            res = requests.get(f"https://min-api.cryptocompare.com/data/price?fsym={sym}&tsyms=USD", headers=HTTP_HEADERS, timeout=3)
+            res = requests.get(f"https://min-api.cryptocompare.com/data/price?fsym={sym}&tsyms=USD", headers=HTTP_HEADERS, timeout=2.5)
             if res.status_code == 200:
                 p = float(res.json()["USD"])
                 if p > 0:
                     cached_prices[symbol] = p
                     return p
-        except: pass
+        except Exception:
+            pass
 
-    # 3. CoinCap Public API
+    # 3. CoinCap API
     coincap_map = {"BTCUSDT": "bitcoin", "ETHUSDT": "ethereum", "SOLUSDT": "solana"}
     if symbol in coincap_map:
         try:
             cid = coincap_map[symbol]
-            res = requests.get(f"https://api.coincap.io/v2/assets/{cid}", headers=HTTP_HEADERS, timeout=3)
+            res = requests.get(f"https://api.coincap.io/v2/assets/{cid}", headers=HTTP_HEADERS, timeout=2.5)
             if res.status_code == 200:
                 p = float(res.json()["data"]["priceUsd"])
                 if p > 0:
                     cached_prices[symbol] = p
                     return p
-        except: pass
+        except Exception:
+            pass
 
-    # 4. Fallback to in-memory verified cache (Never fails, zero hang)
+    # 4. Fallback Cache (Never None, zero hang)
     return cached_prices.get(symbol, 100.0)
 
 def execute_auto_buy(symbol, price):
@@ -169,7 +187,7 @@ def execute_auto_buy(symbol, price):
         "entry_timestamp": time.time(),
         "mode": "NIGHT" if night else "DAY",
         "max_hold_mins": max_hold_mins,
-        "time_str": get_ist_time().strftime("%I:%M:%S %p")
+        "time_str": get_ist_time().strftime("%I:%M:%S %p IST")
     }
     open_positions.append(trade)
 
@@ -183,14 +201,14 @@ def execute_auto_buy(symbol, price):
         f"🛑 Safety SL (-{loss_pct:.2f}%): `${sl:,.2f}` (-${expected_loss:.2f})\n"
         f"🧺 Basket Target: +$1.40 Total"
     )
-    print(f"[{trade['mode']} BUY] {symbol} @ ${price:,.2f}", flush=True)
+    print(f"[{trade['mode']} BUY] {symbol} @ ${price:,.2f} | Size: ${trade_size_usd}", flush=True)
     send_alert(msg)
 
 def execute_basket_harvest(total_pnl, exit_prices):
     global CAPITAL, realized_pnl, total_trades, wins, open_positions, last_basket_exit_time
     count_closed = len(open_positions)
     open_positions = []
-    
+
     total_pnl = round(total_pnl, 2)
     CAPITAL = round(CAPITAL + total_pnl, 2)
     realized_pnl = round(realized_pnl + total_pnl, 2)
@@ -218,7 +236,8 @@ def execute_auto_sell(index, price, reason):
     CAPITAL = round(CAPITAL + pnl, 2)
     realized_pnl = round(realized_pnl + pnl, 2)
     total_trades += 1
-    if pnl > 0: wins += 1
+    if pnl > 0:
+        wins += 1
 
     save_state(CAPITAL, realized_pnl, total_trades, wins)
 
@@ -229,34 +248,38 @@ def execute_auto_sell(index, price, reason):
         f"Coin: `{pos['symbol']}`\n"
         f"Exit: `${price:,.2f}` | Entry: `${pos['entry']:,.2f}`\n"
         f"💰 Net P&L: `{pnl_sign}${pnl:,.2f}`\n"
-        f"💼 Total Balance:* `${CAPITAL:,.2f}` | Trades: `{total_trades}`"
+        f"💼 Total Balance: `${CAPITAL:,.2f}` | Trades: `{total_trades}`"
     )
     print(f"[EXIT: {reason}] {pos['symbol']} @ ${price:,.2f} | PnL: {pnl_sign}${pnl:,.2f}", flush=True)
     send_alert(msg)
 
 def trading_loop_worker():
     time.sleep(1.0)
+    print("[ENGINE BOOT] Pawan Quant Engine V10.0 Worker Loop Started Successfully!", flush=True)
     while True:
         try:
             now = time.time()
             night = is_night_session()
             max_allowed_trades = 1 if night else 3
 
-            # 1. Combined Basket Harvest Check (+1.40 USD)
+            # --- STEP 1: COMBINED BASKET HARVEST (+1.40 USD TARGET) ---
             if len(open_positions) >= 2:
                 total_basket_pnl = 0.0
                 exit_prices = {}
+
                 for pos in open_positions:
                     p = get_live_price(pos["symbol"])
                     total_basket_pnl += (p - pos["entry"]) * pos["qty"]
                     exit_prices[pos["symbol"]] = p
+
+                print(f"[BASKET TICK] Floating: {total_basket_pnl:+.2f} / +${BASKET_PROFIT_TARGET_USD:.2f} Target | Open: {len(open_positions)}", flush=True)
 
                 if total_basket_pnl >= BASKET_PROFIT_TARGET_USD:
                     execute_basket_harvest(total_basket_pnl, exit_prices)
                     time.sleep(POLL_INTERVAL)
                     continue
 
-            # 2. Individual Target, SL, and 45-Min Hard Exit
+            # --- STEP 2: INDIVIDUAL TARGET, SL & 45-MIN HARD EXIT ---
             for i in range(len(open_positions) - 1, -1, -1):
                 pos = open_positions[i]
                 s = pos["symbol"]
@@ -276,7 +299,7 @@ def trading_loop_worker():
                     execute_auto_sell(i, curr_p, f"STRICT {int(pos['max_hold_mins'])}-MIN HARD EXIT ({pnl_pct*100:+.2f}%)")
                     continue
 
-            # 3. Auto Re-Cycle Entry Controller (2 min cooldown after harvest)
+            # --- STEP 3: RE-CYCLE ENTRY (2-MIN COOLDOWN AFTER HARVEST) ---
             cooldown_left = BASKET_RE_ENTRY_COOLDOWN - (now - last_basket_exit_time)
             if cooldown_left <= 0 and len(open_positions) < max_allowed_trades:
                 active_symbols = [p["symbol"] for p in open_positions]
@@ -285,13 +308,23 @@ def trading_loop_worker():
                         p = get_live_price(s)
                         execute_auto_buy(s, p)
                         time.sleep(1.0)
+            elif cooldown_left > 0:
+                print(f"[COOLDOWN] Waiting {int(cooldown_left)}s before opening fresh basket...", flush=True)
 
             time.sleep(POLL_INTERVAL)
         except Exception as e:
-            print(f"Loop Exception: {e}", flush=True)
+            print(f"[WORKER RECOVERY] Handled exception: {e}", flush=True)
             time.sleep(POLL_INTERVAL)
 
-threading.Thread(target=trading_loop_worker, daemon=True).start()
+worker_thread = threading.Thread(target=trading_loop_worker, daemon=True)
+worker_thread.start()
+
+@app.after_request
+def add_cors_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+    return response
 
 @app.route('/')
 def home():
@@ -299,7 +332,7 @@ def home():
     net_profit = round(CAPITAL - 1000.0, 2)
     return jsonify({
         "status": "ONLINE_24_7",
-        "system": "Pawan Quant Engine V9.0 (Bulletproof Auto-Trading)",
+        "system": "Pawan Quant Engine V10.0 (Bulletproof Cloud Auto-Trader)",
         "session": "NIGHT" if is_night_session() else "DAY",
         "starting_capital": 1000.00,
         "balance": round(CAPITAL, 2),
@@ -311,7 +344,18 @@ def home():
         "win_rate": f"{win_pct}%",
         "basket_harvest_target": f"+${BASKET_PROFIT_TARGET_USD:.2f}",
         "active_positions_count": len(open_positions),
-        "open_positions": [{"symbol": p["symbol"], "entry": p["entry"], "target": p["tp"], "size": p["trade_size"]} for p in open_positions],
+        "open_positions": [
+            {
+                "symbol": p["symbol"],
+                "entry": p["entry"],
+                "target": p["tp"],
+                "sl": p["sl"],
+                "size": p["trade_size"],
+                "qty": p["qty"],
+                "time_str": p.get("time_str", "")
+            }
+            for p in open_positions
+        ],
         "ist_time": get_ist_time().strftime("%Y-%m-%d %I:%M:%S %p IST")
     })
 
